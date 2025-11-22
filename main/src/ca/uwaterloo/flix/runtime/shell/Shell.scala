@@ -33,6 +33,14 @@ import java.io.PrintStream
 import java.util.logging.{Level, Logger}
 import scala.collection.mutable
 
+object Shell {
+
+  /**
+    * The name used for the main entry point created to :eval an expression
+    */
+  val ShellEntryPointName : String = "shell1"
+}
+
 class Shell(bootstrap: Bootstrap, options: Options) {
 
   /**
@@ -65,7 +73,7 @@ class Shell(bootstrap: Bootstrap, options: Options) {
 
     s match {
       // First, check for a string with two backslashes at start and end
-      case twoBackslashes(s) => s
+      case twoBackslashes(s1) => s1
 
       // If not, then replace all escaped line endings with \n
       case _ =>
@@ -182,7 +190,7 @@ class Shell(bootstrap: Bootstrap, options: Options) {
   /**
     * Reloads every source path.
     */
-  private def execReload()(implicit terminal: Terminal): Unit = {
+  private def execReload()(implicit terminal: Terminal): Result[Unit, Unit] = {
 
     // Scan the disk to find changes, and add source to the flix object
     bootstrap.reconfigureFlix(flix)
@@ -190,8 +198,12 @@ class Shell(bootstrap: Bootstrap, options: Options) {
     // Remove any previous definitions, as they may no longer be valid against the new source
     clearFragments()
 
-    compile(progress = isFirstCompile)
+    val compilation = compile(progress = isFirstCompile)
     isFirstCompile = false
+    compilation.toResult match {
+      case Result.Ok(_) => Result.Ok(())
+      case Result.Err(_) => Result.Err(())
+    }
   }
 
   /**
@@ -306,16 +318,20 @@ class Shell(bootstrap: Bootstrap, options: Options) {
         // The input is an expression. Wrap it in main and run it.
 
         // The name of the generated main function.
-        val main = Symbol.mkDefnSym("shell1")
+        val main = Symbol.mkDefnSym(Shell.ShellEntryPointName)
 
         val effString = Symbol.PrimitiveEffs.map(_.toString).mkString(" + ")
-        // Cast to allow any subset of the primitive effects
-        val src =
+        val src = {
+          // A dummy unit value is returned initially instead of println(s). This is because s could have any set of
+          // effects and hence, we do not know the final type signature of main until s has been typed.
+          //
+          // We cannot just accept the effString as our effect set because evaluating s may generate other effects.
+          // checked_ecast(()) is replaced with _f() in the `EntryPoint` phase. Specifically, in the function `mkShell`
           s"""def ${main.name}(): Unit \\ $effString =
-             |checked_ecast(
-             |  Assert.runWithIO(_ -> println($s))
-             |)
+             |def _f() = { println($s) };
+             |checked_ecast(())
              |""".stripMargin
+        }
         flix.addSourceCode("<shell>", src)(SecurityContext.Unrestricted)
         run(main)
         // Remove immediately so it doesn't confuse subsequent compilations (e.g. reloads or declarations)
@@ -332,8 +348,11 @@ class Shell(bootstrap: Bootstrap, options: Options) {
     * Reloads and evaluates the given source code.
     */
   private def execReloadAndEval(s: String)(implicit terminal: Terminal): Unit = {
-    execReload()
-    execEval(s)
+    // Only eval if reload was successful
+    execReload() match {
+      case Result.Ok(()) => execEval(s)
+      case Result.Err(()) => ()
+    }
   }
 
   /**
@@ -364,14 +383,13 @@ class Shell(bootstrap: Bootstrap, options: Options) {
     * Compiles the current files and packages (first time from scratch, subsequent times incrementally)
     */
   private def compile(entryPoint: Option[Symbol.DefnSym] = None, progress: Boolean = true)(implicit terminal: Terminal): Validation[CompilationResult, CompilationMessage] = {
-
     // Set the main entry point if there is one (i.e. if the programmer wrote an expression)
     flix.setOptions(options.copy(entryPoint = entryPoint, progress = progress))
 
     flix.check() match {
-      case (Some(root), Nil) =>
-        this.root = Some(root)
-        val result = flix.codeGen(root)
+      case (Some(r), Nil) =>
+        this.root = Some(r)
+        val result = flix.codeGen(r)
         result.toResult match {
           case Result.Ok(_) => result
           case Result.Err(errors) =>

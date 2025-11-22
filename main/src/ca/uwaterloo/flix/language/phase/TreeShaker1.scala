@@ -37,12 +37,17 @@ object TreeShaker1 {
   def run(root: Root)(implicit flix: Flix): Root = flix.phase("TreeShaker1") {
     val initReach: Set[ReachableSym] = root.entryPoints.map(ReachableSym.DefnSym.apply)
 
+    val loweringTargets: Set[ReachableSym] = root.defs.foldLeft(Set[ReachableSym]()) {
+      case (acc, (_, defn)) if defn.spec.ann.isLoweringTarget => acc + ReachableSym.DefnSym(defn.sym)
+      case (acc, _) => acc
+    }
+
     // Compute the symbols that are transitively reachable.
-    val allReachable = ParOps.parReach(initReach, visitSym(_, root))
+    val allReachable = ParOps.parReach(initReach ++ loweringTargets, visitSym(_, root))
 
     // Filter the reachable definitions.
     val reachableDefs = root.defs.filter {
-      case (sym, defn) => defn.spec.ann.isLoweringTarget || allReachable.contains(ReachableSym.DefnSym(sym))
+      case (sym, _) => allReachable.contains(ReachableSym.DefnSym(sym))
     }
 
     root.copy(defs = reachableDefs)

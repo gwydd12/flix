@@ -127,6 +127,13 @@ instance Reducible[Nec] {
     redef toList(l: Nec[a]): List[a] = Nec.toList(l)
 }
 
+instance Formattable[Nec[a]] with Formattable[a] {
+    type Aef = Formattable.Aef[a]
+
+    pub def format(x: Nec[a]): RichString \ Formattable.Aef[a] =
+        RichString.fromString("Nec#{") + RichString.joinWith(Formattable.format, RichString.fromString(", "), x) + RichString.fromString("}")
+}
+
 instance ToString[Nec[a]] with ToString[a] {
     pub def toString(c: Nec[a]): String = region rc {
         "Nec#{" + (Nec.iterator(rc, c) |> Iterator.join(", ")) + "}"
@@ -764,7 +771,7 @@ mod Nec {
     ///
     /// Returns the list `c` as a set.
     ///
-    pub def toSet(c: Nec[a]): Set[a] with Order[a] = foldRight((x, acc) -> Set.insert(x, acc), Set.empty(), c)
+    pub def toSet(c: Nec[a]): Set[a] with Order[a] = foldRight(Set.insert, Set.empty(), c)
 
     ///
     /// Returns the Nec of pairs `c` that represents an association list as a map.
@@ -932,7 +939,7 @@ mod Nec {
     ///
     pub def reduce(c: Nec[a]): a with SemiGroup[a] = match viewLeft(c) {
         case ViewLeft.OneLeft(x)      => x
-        case ViewLeft.SomeLeft(x, xs) => foldLeft((acc, y) -> SemiGroup.combine(acc, y), x, xs)
+        case ViewLeft.SomeLeft(x, xs) => foldLeft(SemiGroup.combine, x, xs)
     }
 
     ///

@@ -194,7 +194,14 @@ object Redundancy {
         case (acc, (_, field)) =>
           acc ++ field.tpe.typeVars.map(_.sym)
       }
-      val unusedTypeParams = decl.tparams.init.filter { // the last tparam is implicitly used for the region
+      val mustBeUsed = if (decl.tparams.nonEmpty && decl.mod.isMutable) {
+        // The struct is mutable: All type parameters except the region parameter must be used.
+        decl.tparams.init
+      } else {
+        // The struct is immutable (or have 0 type parameters): All type parameters must be used.
+        decl.tparams
+      }
+      val unusedTypeParams = mustBeUsed.filter { // the last tparam is implicitly used for the region
         tparam =>
           !usedTypeVars.contains(tparam.sym) &&
             !tparam.name.name.startsWith("_")
@@ -483,13 +490,8 @@ object Redundancy {
       val us2 = visitExp(exp2, env0, rc)
 
       // Check for useless pure expressions.
-      if (isUnderAppliedFunction(exp1)) {
-        // `isUnderAppliedFunction` implies `isUselessExpression` so this must be checked first.
-        (us1 ++ us2) + UnderAppliedFunction(exp1.tpe, exp1.loc)
-      } else if (isUselessExpression(exp1)) {
+      if (isUselessExpression(exp1)) {
         (us1 ++ us2) + UselessExpression(exp1.tpe, exp1.loc)
-      } else if (isMustUse(exp1)(root) && !isHole(exp1)) {
-        (us1 ++ us2) + UnusedMustUseValue(exp1.tpe, exp1.loc)
       } else {
         us1 ++ us2
       }
@@ -697,7 +699,7 @@ object Redundancy {
 
     case Expr.StructNew(sym, fields, region, _, _, _) =>
       sctx.structSyms.put(sym, ())
-      visitExps(fields.map { case (_, v) => v }, env0, rc) ++ visitExp(region, env0, rc)
+      visitExps(fields.map { case (_, v) => v }, env0, rc) ++ region.map(visitExp(_, env0, rc)).getOrElse(Used.empty)
 
     case Expr.StructGet(e, field, _, _, _) =>
       sctx.structFieldSyms.put(field.sym, ())
@@ -1049,41 +1051,6 @@ object Redundancy {
   }
 
   /**
-    * Returns true if the expression is pure and of impure function type.
-    */
-  private def isUnderAppliedFunction(exp: Expr): Boolean = {
-    val isPure = exp.eff == Type.Pure
-    val isNonPureFunction = exp.tpe.typeConstructor match {
-      case Some(TypeConstructor.Arrow(_)) =>
-        curriedArrowPurityType(exp.tpe) != Type.Pure
-      case _ => false
-    }
-    isPure && isNonPureFunction
-  }
-
-  /**
-    * Returns the purity type of `this` curried arrow type.
-    *
-    * For example,
-    *
-    * {{{
-    * Int32                                        =>     throw
-    * Int32 -> String -> Int32 \ Pure              =>     Pure
-    * (Int32, String) -> String -> Bool \ IO       =>     IO
-    * }}}
-    *
-    * NB: Assumes that `this` type is an arrow.
-    */
-  @tailrec
-  private def curriedArrowPurityType(tpe: Type): Type = {
-    val resType = tpe.arrowResultType
-    resType.typeConstructor match {
-      case Some(TypeConstructor.Arrow(_)) => curriedArrowPurityType(resType)
-      case _ => tpe.arrowEffectType
-    }
-  }
-
-  /**
     * Returns true if the expression is pure.
     */
   private def isPure(exp: Expr): Boolean =
@@ -1094,21 +1061,6 @@ object Redundancy {
     */
   private def isUselessExpression(exp: Expr): Boolean =
     isPure(exp)
-
-  /**
-    * Returns `true` if the expression must be used.
-    */
-  private def isMustUse(exp: Expr)(implicit root: Root): Boolean =
-    isMustUseType(exp.tpe)
-
-  /**
-    * Returns `true` if the given type `tpe` is marked as `@MustUse` or is intrinsically `@MustUse`.
-    */
-  private def isMustUseType(tpe: Type)(implicit root: Root): Boolean = tpe.typeConstructor match {
-    case Some(TypeConstructor.Arrow(_)) => true
-    case Some(TypeConstructor.Enum(sym, _)) => root.enums(sym).ann.isMustUse
-    case _ => false
-  }
 
   /**
     * Returns true if the expression is a hole.
@@ -1201,6 +1153,7 @@ object Redundancy {
     !decl.spec.ann.isTest &&
       !decl.spec.mod.isPublic &&
       !decl.spec.ann.isExport &&
+      !decl.spec.ann.isDefaultHandler &&
       !isMain(decl.sym) &&
       !decl.sym.name.startsWith("_") &&
       !sctx.defSyms.containsKey(decl.sym)

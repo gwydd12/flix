@@ -124,7 +124,7 @@ mod RedBlackTree {
     /// It is assumed that this function is only used in contexts
     /// where this effect is not observable outside of the RedBlackTree module.
     ///
-    def threads(): Int32 = unsafe {
+    def threads(): Int32 = {
         // Note: We use a multiple of the number of physical cores for better performance.
         let multiplier = 4;
         multiplier * Runtime.getRuntime().availableProcessors()
@@ -840,13 +840,14 @@ mod RedBlackTree {
     ///
     /// Returns a RedBlackTree with mappings `k => f(v)` for every `k => v` in `t`.
     ///
-    pub def mapAWithKey(f: (k, v1) -> m[v2] \ ef, t: RedBlackTree[k, v1]): m[RedBlackTree[k, v2]] \ ef with Applicative[m] =
-        def loop(tt, k) = match tt {
-            case Node(color, left, key, v, right) => loop(left, kl -> {let ans = f(key, v); loop(right, kr -> k(nodeA(color, kl, key, ans, kr)))})
-            case _                                => k(Applicative.point(Leaf))
-        };
-        loop(t, x -> checked_ecast(x))
-
+    pub def mapAWithKey(f: (k, v1) -> m[v2] \ ef, t: RedBlackTree[k, v1]): m[RedBlackTree[k, v2]] \ ef with Applicative[m] = match t {
+        case Node(color, left, key, v, right) =>
+            let leftA  = mapAWithKey(f, left);
+            let ans = f(key, v);
+            let rightA = mapAWithKey(f, right);
+            nodeA(color, leftA, key, ans, rightA)
+        case _                                => Applicative.point(Leaf)
+    }
 
     ///
     /// Applies `cmp` over the tree `t` in parallel and optionally returns the lowest

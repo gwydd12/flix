@@ -1,11 +1,20 @@
 # Changelog
 
-Version 0.65.0
+Version 0.66.2:
+- LSP: Added infrastructure for code formatting (thanks Din!)
+
+Version 0.66.1:
+- Compiler: Fixed build to target Java 21 (thanks Magnus!)
+
+Version 0.66.0:
+- Package Manager: Added support for security trust levels (thanks Jakob!)
+
+Version 0.65.0:
 - Compiler: Added `MagicDefCompleter` (thanks Magnus!)
 - Library: Added `MutHashSet` (thanks Magnus!)
 - Library: Added `MutHashMap` (thanks Magnus!)
 
-Version 0.64.0
+Version 0.64.0:
 - Language: Added support for `Debug.dprintln` (thanks Magnus!)
 - Language: Added support for debug string interpolations (thanks Magnus!)
 - Compiler: Improved lexer performance (thanks Jonathan!)

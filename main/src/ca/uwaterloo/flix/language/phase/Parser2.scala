@@ -491,6 +491,17 @@ object Parser2 {
     false
   }
 
+  /** Returns the distance to the first non-comment token after lookahead. */
+  @tailrec
+  private def nextNonComment(lookahead: Int)(implicit s: State): Int = {
+    if (s.position + lookahead > s.tokens.length - 1) {
+      lookahead
+    } else s.tokens(s.position + lookahead).kind match {
+      case t if t.isComment => nextNonComment(lookahead + 1)
+      case _ => lookahead
+    }
+  }
+
   /** Separation permissions between a list of items. */
   sealed trait Separation
 
@@ -1534,6 +1545,35 @@ object Parser2 {
       lhs
     }
 
+    /**
+      * Returns true if the expression looks like a block expression.
+      *
+      * Does not guarantee that the expression successfully parses to an expression.
+      */
+    private def isBlockExpr()(implicit s: State): Boolean = {
+      if (!at(TokenKind.CurlyL)) {
+        return false
+      }
+      // Determines if a '{' is opening a block, a record literal, or a record operation.
+      // We can discern between record ops and literals vs. blocks by looking at the next two
+      // non-comment tokens.
+      val nextTwoNonCommentTokens = {
+        val nextIdx = nextNonComment(1)
+        val nextNextIdx = nextNonComment(nextIdx + 1)
+        (nth(nextIdx), nth(nextNextIdx))
+      }
+      nextTwoNonCommentTokens match {
+        case (TokenKind.CurlyR, _)
+             | (TokenKind.NameLowercase, TokenKind.Equal)
+             | (TokenKind.Plus, TokenKind.NameLowercase)
+             | (TokenKind.Minus, TokenKind.NameLowercase) =>
+          // Either `{ +y = expr | expr }` or `{ x = expr }`.
+          // Both are parsed the same and the difference is handled in Weeder.
+          false
+        case _ => true
+      }
+    }
+
     /** Returns the binary operator type of the current token if applicable. */
     private def peekBinaryOp()(implicit s: State): Option[BinaryOp] = {
       nthToken(0) match {
@@ -1916,9 +1956,9 @@ object Parser2 {
     private def parenOrTupleOrLambdaExpr()(implicit s: State): Mark.Closed = {
       implicit val sctx: SyntacticContext = SyntacticContext.Expr.OtherExpr
       assert(at(TokenKind.ParenL))
-      (nth(0), nth(1)) match {
+      (nth(0), nth(1), nth(2)) match {
         // Detect unit tuple.
-        case (TokenKind.ParenL, TokenKind.ParenR) =>
+        case (TokenKind.ParenL, TokenKind.ParenR, _) =>
           // Detect unit lambda `() -> expr`.
           if (nth(2) == TokenKind.ArrowThinRWhitespace) {
             lambda()
@@ -1929,7 +1969,16 @@ object Parser2 {
             close(mark, TreeKind.Expr.Tuple)
           }
 
-        case (TokenKind.ParenL, _) =>
+        case (TokenKind.ParenL, tok, TokenKind.ParenR) if tok.isOperator =>
+          val mark = open()
+          advance()
+          val opMark = open()
+          advance()
+          close(opMark, TreeKind.Operator)
+          advance()
+          close(mark, TreeKind.Expr.OperatorAsLambda)
+
+        case (TokenKind.ParenL, _, _) =>
           // Detect lambda function declaration.
           val isLambda = {
             var level = 1
@@ -1963,7 +2012,7 @@ object Parser2 {
             parenOrTupleOrAscribe()
           }
 
-        case (t, _) =>
+        case (t, _, _) =>
           val error = UnexpectedToken(expected = NamedTokenSet.FromKinds(Set(TokenKind.ParenL)), actual = Some(t), sctx, loc = currentSourceLocation())
           advanceWithError(error)
       }
@@ -2092,11 +2141,16 @@ object Parser2 {
       expect(TokenKind.ParenL)
       expression()
       expect(TokenKind.ParenR)
+      val thenIsBlockish = isBlockExpr()
       expression()
       if (eat(TokenKind.KeywordElse)) {
         // Only call expression, if we found an 'else'. Otherwise when it is missing, defs might
         // get read as let-rec-defs.
         expression()
+      } else if (!thenIsBlockish) {
+        // `if (exp1) exp2` is illegal, but `if (exp1) { exp2 }` is not
+        val error = UnexpectedToken(NamedTokenSet.FromKinds(Set(TokenKind.KeywordElse)), actual = None, sctx, hint = Some("an if expression without an else branch must be enclosed in braces."), currentSourceLocation())
+        closeWithError(open(), error)
       }
       close(mark, TreeKind.Expr.IfThenElse)
     }
@@ -2415,37 +2469,11 @@ object Parser2 {
     }
 
     private def blockOrRecordExpr()(implicit s: State): Mark.Closed = {
-      // Determines if a '{' is opening a block, a record literal, or a record operation.
       assert(at(TokenKind.CurlyL))
-
-      /** Returns the distance to the first non-comment token after lookahead. */
-      @tailrec
-      def nextNonComment(lookahead: Int): Int = {
-        if (s.position + lookahead > s.tokens.length - 1) {
-          lookahead
-        } else s.tokens(s.position + lookahead).kind match {
-          case t if t.isComment => nextNonComment(lookahead + 1)
-          case _ => lookahead
-        }
-      }
-
-      // We can discern between record ops and literals vs. blocks by looking at the next two
-      // non-comment tokens.
-      val nextTwoNonCommentTokens = {
-        val nextIdx = nextNonComment(1)
-        val nextNextIdx = nextNonComment(nextIdx + 1)
-        (nth(nextIdx), nth(nextNextIdx))
-      }
-      nextTwoNonCommentTokens match {
-        case (TokenKind.CurlyR, _)
-             | (TokenKind.NameLowercase, TokenKind.Equal)
-             | (TokenKind.Plus, TokenKind.NameLowercase)
-             | (TokenKind.Minus, TokenKind.NameLowercase) =>
-            // Either `{ +y = expr | expr }` or `{ x = expr }`.
-            // Both are parsed the same and the difference is handled in Weeder.
-            recordOperation()
-        case _ => block()
-      }
+      if (isBlockExpr())
+        block()
+      else
+        recordOperation()
     }
 
     private def recordOperation()(implicit s: State): Mark.Closed = {

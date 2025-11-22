@@ -41,6 +41,13 @@ instance Hash[Set[a]] with Hash[a] {
         Set.foldLeft((acc, x) -> acc `Hash.combine` Hash.hash(x), Hash.magic(), s)
 }
 
+instance Formattable[Set[a]] with Formattable[a] {
+    type Aef = Formattable.Aef[a]
+
+    pub def format(x: Set[a]): RichString \ Formattable.Aef[a] =
+        RichString.fromString("Set#{") + RichString.joinWith(Formattable.format, RichString.fromString(", "), Set.toList(x)) + RichString.fromString("}")
+}
+
 instance ToString[Set[a]] with ToString[a] {
     pub def toString(s: Set[a]): String = Set.toString(s)
 }
@@ -497,7 +504,7 @@ mod Set {
     /// Returns the set `s` as a chain.
     ///
     pub def toChain(s: Set[a]): Chain[a] =
-        foldLeft((acc, x) -> Chain.snoc(acc, x), Chain.empty(), s)
+        foldLeft(Chain.snoc, Chain.empty(), s)
 
     ///
     /// Returns the association set `s` as a map.
