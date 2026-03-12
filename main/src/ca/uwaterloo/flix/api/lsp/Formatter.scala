@@ -23,7 +23,7 @@ import ca.uwaterloo.flix.language.ast.{SyntaxTree, Token}
 import ca.uwaterloo.flix.util.Result
 
 import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, Path, Paths}
 
 /**
   * A formatter for Flix syntax trees.
@@ -292,9 +292,10 @@ object Formatter {
     * @return an option containing the syntax tree if found
     */
   private def findTreeBasedOnUri(root: SyntaxTree.Root, uri: String): Option[SyntaxTree.Tree] = {
-    // TODO: This is a temporary solution. We need a better way to map URIs to syntax trees.
+    // Normalize the URI to ensure consistent comparison across platforms.
+    val normalizedUri = Paths.get(uri).normalize().toString
     root.units.find {
-      case (path, _) => path.toString == uri
+      case (path, _) => path.toString == normalizedUri
     }.map {
       case (_, tree) => tree
     }
